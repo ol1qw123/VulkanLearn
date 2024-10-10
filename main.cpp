@@ -1,7 +1,3 @@
-#include <vulkan/vulkan.hpp>
-#include <stdexcept>
-#include <iostream>
-#include <vector>
 
 #include "classheader.hpp"
 int main() {
