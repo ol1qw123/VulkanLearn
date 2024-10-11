@@ -1,87 +1,172 @@
 #pragma once
+
 #include <vulkan/vulkan.hpp>
+#include <GLFW/glfw3.h>
 #include <stdexcept>
 #include <iostream>
 #include <vector>
 #include "Alloctor.hpp"
 
-
 namespace vulkan {
 
-    // Encapsulate Vulkan instance within a class to manage its lifecycle
     class VulkanApp {
     public:
-        VulkanApp() : instance(VK_NULL_HANDLE) {
-            setupAppInfo();
-            setupInstanceCreateInfo();
+        VulkanApp() : instance(VK_NULL_HANDLE), logicalDevice(VK_NULL_HANDLE), window(nullptr) {
+            run();
+        }
+
+        void run() {
+            CreateAllocator();
             createInstance();
-            CreateAlloctor();
+            wininit();
             enumeratePhysicalDevices();
+            createLogicalDevice();
+            mainLoop();
+            cleanup();
         }
 
         ~VulkanApp() {
-            destroyInstance();
+            cleanup();
+        }
+
+        void cleanup() {
+            if (logicalDevice != VK_NULL_HANDLE) {
+                vkDestroyDevice(logicalDevice, &Alloctor);
+            }
+            if (surface != VK_NULL_HANDLE) {
+                vkDestroySurfaceKHR(instance, surface, &Alloctor);
+            }
+            if (instance != VK_NULL_HANDLE) {
+                vkDestroyInstance(instance, &Alloctor);
+                instance = VK_NULL_HANDLE;
+            }
+            if (window) {
+                glfwDestroyWindow(window);
+            }
+            glfwTerminate();
         }
 
     private:
-        VkApplicationInfo appInfo;
-        VkInstanceCreateInfo createInfo;
+        VkApplicationInfo appInfo{};
+        VkInstanceCreateInfo createInfo{};
         VkInstance instance;
         VkAllocationCallbacks Alloctor;
-        void setupAppInfo() {
-            appInfo = {};
-            appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-            appInfo.pApplicationName = "Test 1";
-            appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-            appInfo.pEngineName = "No engine";
-            appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-            appInfo.apiVersion = VK_API_VERSION_1_3;
+        VkDevice logicalDevice;
+        VkQueue graphicsQueue;
+        std::vector<VkPhysicalDevice> physicalDevices;
+        VkSurfaceKHR surface;
+        GLFWwindow* window;
+
+        void createLogicalDevice() {
+            uint32_t queueFamilyCount = 0;
+            vkGetPhysicalDeviceQueueFamilyProperties(physicalDevices[0], &queueFamilyCount, nullptr);
+
+            std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
+            vkGetPhysicalDeviceQueueFamilyProperties(physicalDevices[0], &queueFamilyCount, queueFamilies.data());
+
+            int graphicsFamilyIndex = -1;
+            for (int i = 0; i < queueFamilies.size(); i++) {
+                if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+                    graphicsFamilyIndex = i;
+                    break;
+                }
+            }
+
+            if (graphicsFamilyIndex == -1) {
+                throw std::runtime_error("Failed to find a suitable queue family!");
+            }
+
+            float queuePriority = 1.0f;
+            VkDeviceQueueCreateInfo queueCreateInfo{};
+            queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            queueCreateInfo.queueFamilyIndex = graphicsFamilyIndex;
+            queueCreateInfo.queueCount = 1;
+            queueCreateInfo.pQueuePriorities = &queuePriority;
+
+            VkPhysicalDeviceFeatures deviceFeatures{};
+
+            VkDeviceCreateInfo createInfo{};
+            createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+            createInfo.pQueueCreateInfos = &queueCreateInfo;
+            createInfo.queueCreateInfoCount = 1;
+            createInfo.pEnabledFeatures = &deviceFeatures;
+
+            if (vkCreateDevice(physicalDevices[0], &createInfo, nullptr, &logicalDevice) != VK_SUCCESS) {
+                throw std::runtime_error("Failed to create logical device!");
+            }
+            else {
+                std::cout << "Created logical device." << std::endl;
+                printPhysicalDeviceProperties(physicalDevices[0], 0);
+            }
+
+            vkGetDeviceQueue(logicalDevice, graphicsFamilyIndex, 0, &graphicsQueue);
         }
-        void CreateAlloctor() {
-            Alloctor.pUserData = NULL; // No user data
-            Alloctor.pfnAllocation = Alloctor::CustomAllocation;
-            Alloctor.pfnReallocation = Alloctor::CustomReallocation;
-            Alloctor.pfnFree = Alloctor::CustomFree;
-            Alloctor.pfnInternalAllocation = NULL; // Optional
-            Alloctor.pfnInternalFree = NULL; // Optional
-        }
-        void setupInstanceCreateInfo() {
-            createInfo = {};
-            createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-            createInfo.pApplicationInfo = &appInfo;
 
-            // No extensions needed for this simple example.
-            std::vector<const char*> extensions = {
-                // VK_KHR_SURFACE_EXTENSION_NAME // Omit for now
-            };
-
-            createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
-            createInfo.ppEnabledExtensionNames = extensions.empty() ? nullptr : extensions.data();
-
-            // No validation layers for simplicity. Add if needed.
-            createInfo.enabledLayerCount = 0;
-            createInfo.ppEnabledLayerNames = nullptr;
-
-            createInfo.flags = 0;
+        void CreateAllocator() {
+            Alloctor = {};  // Initialize to zero
+            Alloctor.pUserData = nullptr;
+            Alloctor.pfnAllocation = Allocator::CustomAllocation;
+            Alloctor.pfnReallocation = Allocator::CustomReallocation;
+            Alloctor.pfnFree = Allocator::CustomFree;
+            // Optional callbacks
+            Alloctor.pfnInternalAllocation = nullptr;
+            Alloctor.pfnInternalFree = nullptr;
         }
 
         void createInstance() {
-            VkResult result = vkCreateInstance(&createInfo, nullptr, &instance);
-            if (result != VK_SUCCESS) {
-                throw std::runtime_error("Failed to create Vulkan instance!");
+            appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+            appInfo.pApplicationName = "Hello Vulkan";
+            appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+            appInfo.pEngineName = "No Engine";
+            appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+            appInfo.apiVersion = VK_API_VERSION_1_3;
+
+            const char* extensions[] = {
+                VK_KHR_SURFACE_EXTENSION_NAME,
+                "VK_KHR_win32_surface"  // Add this line for Windows
+            };
+
+            createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+            createInfo.pApplicationInfo = &appInfo;
+            createInfo.enabledExtensionCount = 2; // Number of extensions
+            createInfo.ppEnabledExtensionNames = extensions;
+
+            if (vkCreateInstance(&createInfo, nullptr, &instance) != VK_SUCCESS) {
+                throw std::runtime_error("Failed to create Vulkan instance");
+            }
+        }
+
+        void wininit() {
+            if (!glfwInit()) {
+                throw std::runtime_error("Failed to initialize GLFW");
+            }
+
+            glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+            window = glfwCreateWindow(800, 600, "Vulkan Window", nullptr, nullptr);
+            if (!window) {
+                throw std::runtime_error("Failed to create GLFW window");
+            }
+
+            // Create the surface
+            if (glfwCreateWindowSurface(instance, window, &Alloctor, &surface) != VK_SUCCESS) {
+                throw std::runtime_error("Failed to create window surface");
+            }
+        }
+
+        void mainLoop() {
+            while (!glfwWindowShouldClose(window)) {
+                glfwPollEvents();  // Handle events
             }
         }
 
         void enumeratePhysicalDevices() {
             uint32_t deviceCount = 0;
-            VkResult result = vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
-            if (result != VK_SUCCESS || deviceCount == 0) {
+            if (vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr) != VK_SUCCESS || deviceCount == 0) {
                 throw std::runtime_error("Failed to find GPUs with Vulkan support!");
             }
 
-            std::vector<VkPhysicalDevice> physicalDevices(deviceCount);
-            result = vkEnumeratePhysicalDevices(instance, &deviceCount, physicalDevices.data());
-            if (result != VK_SUCCESS) {
+            physicalDevices.resize(deviceCount);
+            if (vkEnumeratePhysicalDevices(instance, &deviceCount, physicalDevices.data()) != VK_SUCCESS) {
                 throw std::runtime_error("Failed to enumerate physical devices!");
             }
 
@@ -125,16 +210,11 @@ namespace vulkan {
             std::cout << std::endl << std::endl;
         }
 
-        void destroyInstance() {
-            if (instance != VK_NULL_HANDLE) {
-                vkDestroyInstance(instance, nullptr);
-                instance = VK_NULL_HANDLE;
-            }
-        }
+       
     };
 
-    void run() {
-        VulkanApp app;
+    void runn(){
+        auto app = std::make_unique<VulkanApp>();
         // Application runs and resources are cleaned up automatically
     }
 
